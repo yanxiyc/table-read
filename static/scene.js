@@ -4,38 +4,32 @@ const sceneId = root.dataset.sceneId;
 const sceneTitleEl = document.getElementById("scene-title");
 const statusBadgeEl = document.getElementById("status-badge");
 const scriptPanelEl = document.getElementById("script-panel");
-const transcriptPanelEl = document.getElementById("transcript-panel");
 const startBtn = document.getElementById("start-btn");
+const endBtn = document.getElementById("end-btn");
 const micToggleBtn = document.getElementById("mic-toggle-btn");
 const micStatusEl = document.getElementById("mic-status");
 const lockedOutputEl = document.getElementById("locked-output");
 const lockedScriptTextEl = document.getElementById("locked-script-text");
-const lockedNotesEl = document.getElementById("locked-notes");
-const audioPlayer = document.getElementById("ai-audio-player");
 
 let scene = null;
 let state = null;
 let pollHandle = null;
-let playedAudioEventIds = new Set();
-let audioQueue = [];
-let isAudioPlaying = false;
 
 let micEnabled = false;
-let mediaRecorder = null;
-let audioChunks = [];
 let mediaStream = null;
-let analyser = null;
 let audioContext = null;
-let levelFrame = null;
-let isRecording = false;
-let lastSpeechAt = 0;
-let recordingStartAt = 0;
-let uploadBusy = false;
-let uploadQueue = [];
+let sourceNode = null;
+let processorNode = null;
+let sinkGainNode = null;
 
-const VOICE_THRESHOLD = 0.015;
-const SILENCE_MS = 900;
-const MIN_RECORD_MS = 250;
+let agentSocket = null;
+let agentSocketReady = false;
+let agentStreamId = null;
+
+let playbackNextTime = 0;
+const playbackSources = new Set();
+
+const TARGET_SAMPLE_RATE = 16000;
 
 async function api(path, options = {}) {
   const res = await fetch(path, options);
@@ -51,6 +45,97 @@ function updateStatusBadge(status) {
   statusBadgeEl.className = `badge ${status.toLowerCase()}`;
 }
 
+function setMicStatus(text) {
+  micStatusEl.textContent = text;
+}
+
+function canCaptureNow() {
+  return Boolean(state && (state.status === "RUNNING" || state.status === "READY_TO_LOCK"));
+}
+
+function activeBeatText(beat) {
+  if (!beat) {
+    return "";
+  }
+  const activeVariant = beat.active_variant_id
+    ? beat.variants.find((variant) => variant.id === beat.active_variant_id)
+    : null;
+  if (beat.speaker === "AI") {
+    return (activeVariant ? activeVariant.text : beat.canonical) || "";
+  }
+  return beat.canonical || "";
+}
+
+function lineLabel(beat) {
+  if (!beat) {
+    return "";
+  }
+  return beat.character || beat.speaker || "";
+}
+
+function resolveCurrentBeatIndex() {
+  if (!state || !Number.isInteger(state.beat_index)) {
+    return 0;
+  }
+  return Math.max(0, state.beat_index);
+}
+
+function resolveOpeningInstruction() {
+  if (!scene || !Array.isArray(scene.beats) || scene.beats.length === 0) {
+    return {
+      introduction: "",
+      instruction: "Do not introduce yourself. Wait for the user to speak.",
+    };
+  }
+
+  const currentIndex = Math.min(resolveCurrentBeatIndex(), scene.beats.length - 1);
+  const currentBeat = scene.beats[currentIndex];
+  if (currentBeat && currentBeat.speaker === "AI") {
+    const text = activeBeatText(currentBeat).trim();
+    if (text) {
+      return {
+        introduction: text,
+        instruction: `First utterance must be this exact line from the script: "${lineLabel(currentBeat)}: ${text}"`,
+      };
+    }
+  }
+
+  return {
+    introduction: "",
+    instruction: "The current script beat is not yours. Stay silent until user audio arrives.",
+  };
+}
+
+function buildSceneScriptText() {
+  if (!scene || !Array.isArray(scene.beats)) {
+    return "";
+  }
+  return scene.beats
+    .map((beat) => {
+      const text = activeBeatText(beat);
+      const label = lineLabel(beat);
+      return `${label}: ${text || ""}`;
+    })
+    .join("\n");
+}
+
+function buildAgentSystemPrompt() {
+  const aiName = (scene && scene.characters && scene.characters.AI) ? scene.characters.AI : "AI";
+  const scriptText = buildSceneScriptText();
+  const opening = resolveOpeningInstruction();
+  return [
+    "You are READER, a live voice rehearsal partner.",
+    `Perform only the character: ${aiName}.`,
+    "Never greet, introduce yourself, or explain rules.",
+    "Follow the script beats in order.",
+    opening.instruction,
+    "If the user says commands starting with 'reader', treat them as direction.",
+    "If user says 'lock this version', end the call promptly.",
+    "Script:",
+    scriptText,
+  ].join("\n");
+}
+
 function renderScript() {
   if (!scene) {
     return;
@@ -62,91 +147,33 @@ function renderScript() {
     if (state && idx === state.beat_index) {
       li.classList.add("current");
     }
-    const activeVariant = beat.active_variant_id
-      ? beat.variants.find((variant) => variant.id === beat.active_variant_id)
-      : null;
-    const text = beat.speaker === "AI"
-      ? (activeVariant ? activeVariant.text : beat.canonical)
-      : (beat.canonical || "");
-    const label = beat.character || beat.speaker;
+    const text = activeBeatText(beat);
+    const label = lineLabel(beat);
     li.textContent = `${label}: ${text || ""}`;
     scriptPanelEl.appendChild(li);
   });
 }
 
-function renderTranscript() {
-  if (!state) {
-    return;
+function hasScriptEdits() {
+  if (!state || !Array.isArray(state.director_events)) {
+    return false;
   }
-  transcriptPanelEl.innerHTML = "";
-  for (const event of state.transcript) {
-    const line = document.createElement("div");
-    line.className = "transcript-line";
-    const speaker = document.createElement("span");
-    speaker.className = "speaker";
-    speaker.textContent = (event.meta && event.meta.character) || event.speaker;
-    const text = document.createElement("span");
-    text.textContent = event.text;
-    line.appendChild(speaker);
-    line.appendChild(text);
-    transcriptPanelEl.appendChild(line);
-  }
-  transcriptPanelEl.scrollTop = transcriptPanelEl.scrollHeight;
+  return state.director_events.some((event) => {
+    const actions = event.meta && Array.isArray(event.meta.actions) ? event.meta.actions : [];
+    return actions.some(
+      (action) => typeof action === "string" && (action.startsWith("variant:") || action.startsWith("rewrite:")),
+    );
+  });
 }
 
 function renderLockedOutput() {
-  if (!state || state.status !== "LOCKED") {
+  if (!state || state.status !== "LOCKED" || !hasScriptEdits()) {
     lockedOutputEl.hidden = true;
     return;
   }
   lockedOutputEl.hidden = false;
   lockedScriptTextEl.textContent = state.locked_script_text || "";
-  lockedNotesEl.innerHTML = "";
-  for (const note of state.locked_notes || []) {
-    const li = document.createElement("li");
-    li.textContent = note;
-    lockedNotesEl.appendChild(li);
-  }
 }
-
-function enqueueNewAudio() {
-  if (!state) {
-    return;
-  }
-  for (const event of state.transcript) {
-    const audioUrl = event.meta && event.meta.audio_url;
-    if (event.speaker !== "AI" || !audioUrl || playedAudioEventIds.has(event.event_id)) {
-      continue;
-    }
-    playedAudioEventIds.add(event.event_id);
-    audioQueue.push(audioUrl);
-  }
-  playNextAudio();
-}
-
-async function playNextAudio() {
-  if (isAudioPlaying || audioQueue.length === 0) {
-    return;
-  }
-  isAudioPlaying = true;
-  const src = audioQueue.shift();
-  audioPlayer.src = `${src}?_ts=${Date.now()}`;
-  try {
-    await audioPlayer.play();
-  } catch (err) {
-    // Browser autoplay constraints can block play before first user interaction.
-  }
-}
-
-audioPlayer.addEventListener("ended", () => {
-  isAudioPlaying = false;
-  playNextAudio();
-});
-
-audioPlayer.addEventListener("error", () => {
-  isAudioPlaying = false;
-  playNextAudio();
-});
 
 function syncUi() {
   if (!state) {
@@ -154,9 +181,10 @@ function syncUi() {
   }
   updateStatusBadge(state.status);
   renderScript();
-  renderTranscript();
   renderLockedOutput();
-  enqueueNewAudio();
+  startBtn.disabled = state.status === "RUNNING" || state.status === "READY_TO_LOCK" || state.status === "LOCKED";
+  endBtn.disabled = !(state.status === "RUNNING" || state.status === "READY_TO_LOCK");
+  micToggleBtn.disabled = !canCaptureNow();
 }
 
 async function loadScene() {
@@ -167,8 +195,8 @@ async function loadScene() {
 
 async function refreshState() {
   state = await api(`/api/scenes/${sceneId}/state`);
-  if (state.status === "LOCKED") {
-    stopRecording();
+  if (state.status === "LOCKED" && micEnabled) {
+    disableMic();
   }
   syncUi();
 }
@@ -179,153 +207,388 @@ async function startScene() {
   await refreshState();
 }
 
-function audioLevelRms() {
-  if (!analyser) {
-    return 0;
-  }
-  const data = new Float32Array(analyser.fftSize);
-  analyser.getFloatTimeDomainData(data);
-  let sum = 0;
-  for (let i = 0; i < data.length; i += 1) {
-    sum += data[i] * data[i];
-  }
-  return Math.sqrt(sum / data.length);
-}
-
-function startRecording(now) {
-  if (!mediaRecorder || mediaRecorder.state !== "inactive") {
-    return;
-  }
-  audioChunks = [];
-  recordingStartAt = now;
-  mediaRecorder.start();
-  isRecording = true;
-  micStatusEl.textContent = "Listening (speech detected)";
-}
-
-function stopRecording() {
-  if (!mediaRecorder || mediaRecorder.state === "inactive") {
-    isRecording = false;
-    return;
-  }
-  mediaRecorder.stop();
-  isRecording = false;
-  micStatusEl.textContent = "Listening";
-}
-
-async function processUploadQueue() {
-  if (uploadBusy || uploadQueue.length === 0) {
-    return;
-  }
-  uploadBusy = true;
-  const blob = uploadQueue.shift();
-  const formData = new FormData();
-  formData.append("audio", blob, "utterance.webm");
-  formData.append("client_ts", new Date().toISOString());
-  try {
-    const response = await api(`/api/scenes/${sceneId}/utterance`, {
-      method: "POST",
-      body: formData,
-    });
-    state = response.state;
-    scene = await api(`/api/scenes/${sceneId}`);
-    syncUi();
-  } catch (err) {
-    console.error(err);
-  } finally {
-    uploadBusy = false;
-    processUploadQueue();
+async function endScene() {
+  await api(`/api/scenes/${sceneId}/end`, { method: "POST" });
+  await loadScene();
+  await refreshState();
+  if (micEnabled) {
+    disableMic();
   }
 }
 
-function maybeCaptureSpeechLoop() {
-  if (!micEnabled) {
+function downsampleBuffer(inputFloat32, inputRate, outputRate) {
+  if (inputRate === outputRate || inputRate < outputRate) {
+    return inputFloat32;
+  }
+
+  const ratio = inputRate / outputRate;
+  const outputLength = Math.max(1, Math.round(inputFloat32.length / ratio));
+  const result = new Float32Array(outputLength);
+  let offsetResult = 0;
+  let offsetBuffer = 0;
+
+  while (offsetResult < result.length) {
+    const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+    let accum = 0;
+    let count = 0;
+    for (let i = offsetBuffer; i < nextOffsetBuffer && i < inputFloat32.length; i += 1) {
+      accum += inputFloat32[i];
+      count += 1;
+    }
+    result[offsetResult] = count > 0 ? accum / count : 0;
+    offsetResult += 1;
+    offsetBuffer = nextOffsetBuffer;
+  }
+
+  return result;
+}
+
+function floatTo16BitPCM(float32Data) {
+  const out = new Int16Array(float32Data.length);
+  for (let i = 0; i < float32Data.length; i += 1) {
+    const s = Math.max(-1, Math.min(1, float32Data[i]));
+    out[i] = s < 0 ? Math.round(s * 32768) : Math.round(s * 32767);
+  }
+  return out;
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, chunk);
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function pcm16leBytesToFloat32(bytes) {
+  const sampleCount = Math.floor(bytes.length / 2);
+  const out = new Float32Array(sampleCount);
+  for (let i = 0; i < sampleCount; i += 1) {
+    const lo = bytes[i * 2];
+    const hi = bytes[i * 2 + 1];
+    let sample = (hi << 8) | lo;
+    if (sample & 0x8000) {
+      sample -= 0x10000;
+    }
+    out[i] = sample / 32768;
+  }
+  return out;
+}
+
+function clearPlayback() {
+  if (audioContext) {
+    playbackNextTime = audioContext.currentTime;
+  } else {
+    playbackNextTime = 0;
+  }
+  for (const source of playbackSources) {
+    try {
+      source.stop();
+    } catch (err) {
+      // ignore
+    }
+  }
+  playbackSources.clear();
+}
+
+function playAgentAudioPayload(payload) {
+  if (!audioContext || !payload) {
     return;
   }
-  const now = Date.now();
-  const statusRunning = state && (state.status === "RUNNING" || state.status === "READY_TO_LOCK");
-  if (statusRunning) {
-    const level = audioLevelRms();
-    if (level > VOICE_THRESHOLD) {
-      lastSpeechAt = now;
-      if (!isRecording) {
-        startRecording(now);
+  const bytes = base64ToBytes(payload);
+  const samples = pcm16leBytesToFloat32(bytes);
+  if (!samples.length) {
+    return;
+  }
+  const buffer = audioContext.createBuffer(1, samples.length, TARGET_SAMPLE_RATE);
+  buffer.copyToChannel(samples, 0, 0);
+  const source = audioContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(audioContext.destination);
+
+  const startAt = Math.max(audioContext.currentTime, playbackNextTime);
+  source.start(startAt);
+  playbackNextTime = startAt + buffer.duration;
+  playbackSources.add(source);
+  source.onended = () => {
+    playbackSources.delete(source);
+  };
+}
+
+function maybeParseAgentEvent(raw) {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  if (typeof raw.event === "string") {
+    return raw;
+  }
+  if (typeof raw.type === "string") {
+    return { event: raw.type, ...raw };
+  }
+  return null;
+}
+
+async function connectAgentSocket() {
+  const session = await api(`/api/scenes/${sceneId}/agent-session`);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    agentSocket = new WebSocket(session.ws_url);
+
+    const setSettledResolve = () => {
+      if (!settled) {
+        settled = true;
+        resolve();
       }
+    };
+
+    const setSettledReject = (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    };
+
+    agentSocket.onopen = () => {
+      const streamId = (window.crypto && typeof window.crypto.randomUUID === "function")
+        ? window.crypto.randomUUID()
+        : `stream-${Date.now()}`;
+      agentStreamId = streamId;
+      const systemPrompt = buildAgentSystemPrompt();
+      const opening = resolveOpeningInstruction();
+      const startEvent = {
+        event: "start",
+        stream_id: streamId,
+        config: { input_format: session.input_format || "pcm_16000" },
+        agent: {
+          system_prompt: systemPrompt,
+          introduction: opening.introduction,
+        },
+        metadata: {
+          scene_id: sceneId,
+          scene_title: scene && scene.title ? scene.title : "",
+        },
+      };
+      const voiceId = scene && scene.voice && scene.voice.ai_voice_id;
+      if (voiceId) {
+        startEvent.config.voice_id = voiceId;
+      }
+      agentSocket.send(JSON.stringify(startEvent));
+      setMicStatus("Connecting to Cartesia agent...");
+    };
+
+    agentSocket.onmessage = async (msgEvent) => {
+      let payload = null;
+      try {
+        payload = JSON.parse(msgEvent.data);
+      } catch (err) {
+        return;
+      }
+      const evt = maybeParseAgentEvent(payload);
+      if (!evt) {
+        return;
+      }
+
+      if (evt.event === "ack") {
+        agentSocketReady = true;
+        setMicStatus("Listening (agent live)");
+        setSettledResolve();
+        return;
+      }
+
+      if (evt.event === "media_output") {
+        if (evt.media && typeof evt.media.payload === "string") {
+          playAgentAudioPayload(evt.media.payload);
+        }
+        return;
+      }
+
+      if (evt.event === "clear") {
+        clearPlayback();
+        return;
+      }
+
+      if (evt.event === "error") {
+        setMicStatus(`Agent error: ${evt.message || "unknown error"}`);
+      }
+    };
+
+    agentSocket.onerror = () => {
+      if (!agentSocketReady) {
+        setSettledReject(new Error("Failed to connect to Cartesia agent stream."));
+      } else {
+        setMicStatus("Agent socket error");
+      }
+    };
+
+    agentSocket.onclose = () => {
+      agentSocketReady = false;
+      if (micEnabled) {
+        setMicStatus("Agent stream closed");
+      }
+      if (!settled) {
+        setSettledReject(new Error("Agent stream closed before ready."));
+      }
+    };
+  });
+}
+
+function attachAudioProcessor() {
+  processorNode = audioContext.createScriptProcessor(2048, 1, 1);
+  sourceNode = audioContext.createMediaStreamSource(mediaStream);
+  sinkGainNode = audioContext.createGain();
+  sinkGainNode.gain.value = 0;
+
+  sourceNode.connect(processorNode);
+  processorNode.connect(sinkGainNode);
+  sinkGainNode.connect(audioContext.destination);
+
+  processorNode.onaudioprocess = (event) => {
+    if (!micEnabled || !agentSocketReady || !canCaptureNow() || !agentStreamId || !agentSocket) {
+      return;
     }
-    if (isRecording && now - lastSpeechAt > SILENCE_MS && now - recordingStartAt > MIN_RECORD_MS) {
-      stopRecording();
+    if (agentSocket.readyState !== WebSocket.OPEN) {
+      return;
     }
-  } else if (isRecording) {
-    stopRecording();
-  }
-  levelFrame = requestAnimationFrame(maybeCaptureSpeechLoop);
+    const channelData = event.inputBuffer.getChannelData(0);
+    const normalized = downsampleBuffer(channelData, audioContext.sampleRate, TARGET_SAMPLE_RATE);
+    const pcm = floatTo16BitPCM(normalized);
+    if (!pcm.length) {
+      return;
+    }
+    const bytes = new Uint8Array(pcm.buffer);
+    const payload = bytesToBase64(bytes);
+    agentSocket.send(
+      JSON.stringify({
+        event: "media_input",
+        stream_id: agentStreamId,
+        media: { payload },
+      }),
+    );
+  };
 }
 
 async function enableMic() {
-  mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  audioContext = new AudioContext();
-  const sourceNode = audioContext.createMediaStreamSource(mediaStream);
-  analyser = audioContext.createAnalyser();
-  analyser.fftSize = 2048;
-  sourceNode.connect(analyser);
-
-  const preferredType = "audio/webm;codecs=opus";
-  const mimeType = MediaRecorder.isTypeSupported(preferredType) ? preferredType : "";
-  mediaRecorder = mimeType ? new MediaRecorder(mediaStream, { mimeType }) : new MediaRecorder(mediaStream);
-
-  mediaRecorder.addEventListener("dataavailable", (event) => {
-    if (event.data && event.data.size > 0) {
-      audioChunks.push(event.data);
-    }
+  if (!canCaptureNow()) {
+    throw new Error("Click Start Scene first.");
+  }
+  mediaStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
   });
 
-  mediaRecorder.addEventListener("stop", () => {
-    const durationMs = Date.now() - recordingStartAt;
-    const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" });
-    audioChunks = [];
-    if (durationMs < MIN_RECORD_MS || blob.size < 1500) {
-      return;
-    }
-    uploadQueue.push(blob);
-    processUploadQueue();
-  });
+  audioContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+  await audioContext.resume();
+  clearPlayback();
+  await connectAgentSocket();
+  attachAudioProcessor();
 
   micEnabled = true;
   micToggleBtn.textContent = "Disable Mic";
-  micStatusEl.textContent = "Listening";
-  maybeCaptureSpeechLoop();
+  setMicStatus("Listening (agent live)");
+}
+
+function cleanupAudioNodes() {
+  if (processorNode) {
+    try {
+      processorNode.disconnect();
+    } catch (err) {
+      // ignore
+    }
+  }
+  if (sourceNode) {
+    try {
+      sourceNode.disconnect();
+    } catch (err) {
+      // ignore
+    }
+  }
+  if (sinkGainNode) {
+    try {
+      sinkGainNode.disconnect();
+    } catch (err) {
+      // ignore
+    }
+  }
+  processorNode = null;
+  sourceNode = null;
+  sinkGainNode = null;
+}
+
+function closeAgentSocket() {
+  if (!agentSocket) {
+    return;
+  }
+  try {
+    if (agentSocket.readyState === WebSocket.OPEN && agentStreamId) {
+      agentSocket.send(JSON.stringify({ event: "stop", stream_id: agentStreamId }));
+    }
+    agentSocket.close();
+  } catch (err) {
+    // ignore
+  }
+  agentSocket = null;
+  agentSocketReady = false;
+  agentStreamId = null;
 }
 
 function disableMic() {
   micEnabled = false;
-  micToggleBtn.textContent = "Enable Mic";
-  micStatusEl.textContent = "Mic disabled";
-  if (levelFrame) {
-    cancelAnimationFrame(levelFrame);
-    levelFrame = null;
-  }
-  if (isRecording) {
-    stopRecording();
-  }
+  micToggleBtn.textContent = "Enable Mic (Agent)";
+  setMicStatus("Mic disabled");
+
+  closeAgentSocket();
+  clearPlayback();
+  cleanupAudioNodes();
+
   if (mediaStream) {
     for (const track of mediaStream.getTracks()) {
       track.stop();
     }
   }
+  mediaStream = null;
+
   if (audioContext) {
     audioContext.close();
   }
-  mediaStream = null;
-  analyser = null;
-  mediaRecorder = null;
   audioContext = null;
 }
 
 startBtn.addEventListener("click", async () => {
   try {
     await startScene();
+    if (!micEnabled) {
+      await enableMic();
+    }
   } catch (err) {
     console.error(err);
+    setMicStatus(`Start error: ${err.message}`);
+  }
+});
+
+endBtn.addEventListener("click", async () => {
+  try {
+    endBtn.disabled = true;
+    setMicStatus("Ending scene...");
+    await endScene();
+  } catch (err) {
+    console.error(err);
+    setMicStatus(`End error: ${err.message}`);
   }
 });
 
@@ -337,7 +600,8 @@ micToggleBtn.addEventListener("click", async () => {
       await enableMic();
     }
   } catch (err) {
-    micStatusEl.textContent = `Mic error: ${err.message}`;
+    setMicStatus(`Mic error: ${err.message}`);
+    disableMic();
   }
 });
 

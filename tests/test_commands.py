@@ -21,6 +21,8 @@ def test_classification_works():
     assert classify_utterance("ok scene lock this version") == "lock"
     assert classify_utterance("reader one more time but slower") == "director_cmd"
     assert classify_utterance("I was in traffic") == "actor"
+    assert classify_utterance("I said this line again yesterday") == "actor"
+    assert classify_utterance("can you do it again but faster") == "director_cmd"
 
 
 def test_director_command_replay_and_style():

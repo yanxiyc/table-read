@@ -39,11 +39,15 @@ class Settings:
     data_dir: Path
     cartesia_api_key: str
     cartesia_base_url: str
+    cartesia_agent_id: str
     cartesia_tts_model: str
     cartesia_stt_model: str
     enable_cartesia: bool
     default_pace: float
     cartesia_tts_use_ssml_emotion: bool
+    livekit_url: str
+    livekit_api_key: str
+    livekit_api_secret: str
 
 
 @lru_cache(maxsize=1)
@@ -55,6 +59,7 @@ def get_settings() -> Settings:
         data_dir=Path(os.getenv("SCENE_DATA_DIR", "data/scenes")),
         cartesia_api_key=os.getenv("CARTESIA_API_KEY", ""),
         cartesia_base_url=os.getenv("CARTESIA_BASE_URL", "https://api.cartesia.ai"),
+        cartesia_agent_id=os.getenv("CARTESIA_AGENT_ID", ""),
         cartesia_tts_model=os.getenv("CARTESIA_TTS_MODEL", "sonic-3"),
         cartesia_stt_model=os.getenv("CARTESIA_STT_MODEL", "ink-whisper"),
         enable_cartesia=_parse_bool(os.getenv("ENABLE_CARTESIA", "true"), True),
@@ -62,4 +67,7 @@ def get_settings() -> Settings:
         cartesia_tts_use_ssml_emotion=_parse_bool(
             os.getenv("CARTESIA_TTS_USE_SSML_EMOTION", "true"), True
         ),
+        livekit_url=os.getenv("LIVEKIT_URL", ""),
+        livekit_api_key=os.getenv("LIVEKIT_API_KEY", ""),
+        livekit_api_secret=os.getenv("LIVEKIT_API_SECRET", ""),
     )

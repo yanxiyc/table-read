@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Literal, Optional
 
 from app.models import Beat, Scene, SessionState, StyleState, Variant
 
@@ -11,24 +11,20 @@ LOCK_PATTERNS = (
     re.compile(r"\bok scene[, ]+lock this version\b", re.IGNORECASE),
 )
 
-DIRECTOR_HINT_PATTERNS = (
-    re.compile(r"^\s*reader\b", re.IGNORECASE),
-    re.compile(r"\bagain\b", re.IGNORECASE),
-    re.compile(r"\bredo\b", re.IGNORECASE),
-    re.compile(r"\bone more time\b", re.IGNORECASE),
-    re.compile(r"\bdo it again\b", re.IGNORECASE),
-    re.compile(r"\bwait\b", re.IGNORECASE),
-    re.compile(r"\bstop\b", re.IGNORECASE),
-    re.compile(r"\bslower\b", re.IGNORECASE),
-    re.compile(r"\bfaster\b", re.IGNORECASE),
-    re.compile(r"\bwarmer\b", re.IGNORECASE),
-    re.compile(r"\bcooler\b", re.IGNORECASE),
-    re.compile(r"\bcold\b", re.IGNORECASE),
-    re.compile(r"\btense\b", re.IGNORECASE),
-    re.compile(r"\bchange the line\b", re.IGNORECASE),
-    re.compile(r"\btry this\b", re.IGNORECASE),
-    re.compile(r"\btry it like\b", re.IGNORECASE),
-    re.compile(r"\bhow about this line\b", re.IGNORECASE),
+DIRECTOR_EXPLICIT_PATTERN = re.compile(r"^\s*reader\b", re.IGNORECASE)
+
+DIRECTOR_PREFIX_PATTERNS = (
+    re.compile(r"^\s*(again|redo|one more time|do it again)\b", re.IGNORECASE),
+    re.compile(r"^\s*(wait|stop)\b", re.IGNORECASE),
+    re.compile(r"^\s*(try this|say|change the line|try it like|how about this line)\b", re.IGNORECASE),
+    re.compile(
+        r"^\s*(can you|could you)\b.*\b(again|redo|slower|faster|warmer|cooler|cold|tense)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(slower|faster|warmer|cooler|cold|tense)\b",
+        re.IGNORECASE,
+    ),
 )
 
 EXPLICIT_LINE_PATTERNS = (
@@ -52,15 +48,38 @@ def is_lock_phrase(text: str) -> bool:
     return any(pattern.search(candidate) for pattern in LOCK_PATTERNS)
 
 
-def is_director_command(text: str) -> bool:
+def is_director_command(
+    text: str,
+    state: Optional[SessionState] = None,
+    current_speaker: Optional[Literal["AI", "ACTOR"]] = None,
+) -> bool:
     candidate = text.strip()
-    return any(pattern.search(candidate) for pattern in DIRECTOR_HINT_PATTERNS)
+    if DIRECTOR_EXPLICIT_PATTERN.search(candidate):
+        return True
+
+    if not any(pattern.search(candidate) for pattern in DIRECTOR_PREFIX_PATTERNS):
+        return False
+
+    if state is None:
+        return True
+
+    if current_speaker in {"AI", "ACTOR"}:
+        return True
+
+    if state.status.value in {"RUNNING", "READY_TO_LOCK"}:
+        return True
+
+    return False
 
 
-def classify_utterance(text: str) -> str:
+def classify_utterance(
+    text: str,
+    state: Optional[SessionState] = None,
+    current_speaker: Optional[Literal["AI", "ACTOR"]] = None,
+) -> str:
     if is_lock_phrase(text):
         return "lock"
-    if is_director_command(text):
+    if is_director_command(text, state=state, current_speaker=current_speaker):
         return "director_cmd"
     return "actor"
 

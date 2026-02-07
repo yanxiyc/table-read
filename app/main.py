@@ -9,6 +9,8 @@ from fastapi.templating import Jinja2Templates
 
 from app.api.scenes import router as scenes_router
 from app.config import get_settings
+from app.integrations.cartesia_auth import CartesiaAgentAuthClient
+from app.integrations.livekit_tokens import LiveKitTokenIssuer
 from app.integrations.cartesia_stt import CartesiaSTTClient
 from app.integrations.cartesia_tts import CartesiaTTSClient
 from app.runtime.engine import SceneRuntimeEngine
@@ -25,11 +27,15 @@ def create_app() -> FastAPI:
 
     tts_client = CartesiaTTSClient(settings)
     stt_client = CartesiaSTTClient(settings)
+    cartesia_auth = CartesiaAgentAuthClient(settings)
+    livekit_tokens = LiveKitTokenIssuer(settings)
     runtime_engine = SceneRuntimeEngine(settings=settings, tts_client=tts_client)
 
     app.state.settings = settings
     app.state.tts_client = tts_client
     app.state.stt_client = stt_client
+    app.state.cartesia_auth = cartesia_auth
+    app.state.livekit_tokens = livekit_tokens
     app.state.runtime_engine = runtime_engine
 
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")

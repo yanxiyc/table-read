@@ -73,7 +73,48 @@ class SceneRuntimeEngine:
             state.actor_latest_takes = {}
             self._save_state(scene_id, state)
 
+            # In agent mode, the Cartesia voice agent drives dialog and audio.
+            if self._settings.cartesia_agent_id:
+                return self._state_response(scene, state)
+
             self._advance_ai(scene, state)
+            return self._state_response(scene, state)
+
+    def end_scene(self, scene_id: str, lock: bool = True) -> StateResponse:
+        with self._lock:
+            scene = self.load_scene(scene_id)
+            state = self._load_or_init_state(scene_id)
+
+            if state.status == SceneStatus.LOCKED:
+                return self._state_response(scene, state)
+
+            if state.status not in {SceneStatus.RUNNING, SceneStatus.READY_TO_LOCK, SceneStatus.IDLE}:
+                raise ValueError(f"Scene cannot be ended from status={state.status}.")
+
+            if lock:
+                self._append_transcript(
+                    scene_id,
+                    state,
+                    TranscriptEvent(
+                        speaker="SYSTEM",
+                        text="Scene ended by UI action.",
+                        meta={"action": "end_scene"},
+                    ),
+                )
+                self._lock_scene(scene_id, scene, state)
+            else:
+                state.status = SceneStatus.IDLE
+                self._append_transcript(
+                    scene_id,
+                    state,
+                    TranscriptEvent(
+                        speaker="SYSTEM",
+                        text="Scene stopped by UI action.",
+                        meta={"action": "stop_scene"},
+                    ),
+                )
+                self._save_state(scene_id, state)
+
             return self._state_response(scene, state)
 
     def submit_utterance_text(self, scene_id: str, text: str) -> UtteranceResult:
@@ -87,7 +128,13 @@ class SceneRuntimeEngine:
             if state.status not in {SceneStatus.RUNNING, SceneStatus.READY_TO_LOCK}:
                 raise RuntimeError(f"Scene is not accepting utterances in status={state.status}.")
 
-            kind = classify_utterance(normalized_text)
+            current_speaker = None
+            if 0 <= state.beat_index < len(scene.beats):
+                current_speaker = scene.beats[state.beat_index].speaker
+
+            kind = classify_utterance(
+                normalized_text, state=state, current_speaker=current_speaker
+            )
             actions: list[str] = []
 
             if kind == "lock":

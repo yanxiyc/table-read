@@ -15,28 +15,20 @@
       </header>
       <div class="row">
         <button id="start-btn">Start Scene</button>
-        <button id="mic-toggle-btn" class="secondary">Enable Mic</button>
+        <button id="end-btn">End Scene</button>
+        <button id="mic-toggle-btn" class="secondary" disabled>Enable Mic (Agent)</button>
         <span id="mic-status">Mic disabled</span>
       </div>
     </section>
 
-    <section class="grid">
-      <article class="card">
-        <h2>Active Script</h2>
-        <ol id="script-panel" class="script-list"></ol>
-      </article>
-
-      <article class="card">
-        <h2>Transcript</h2>
-        <div id="transcript-panel" class="transcript"></div>
-      </article>
+    <section class="card">
+      <h2>Active Script</h2>
+      <ol id="script-panel" class="script-list"></ol>
     </section>
 
     <section class="card" id="locked-output" hidden>
-      <h2>Locked Script</h2>
+      <h2>Updated Script</h2>
       <pre id="locked-script-text"></pre>
-      <h3>Notes</h3>
-      <ul id="locked-notes"></ul>
     </section>
 
     <audio id="ai-audio-player" autoplay></audio>
