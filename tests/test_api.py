@@ -36,7 +36,7 @@ def test_scene_runtime_flow(tmp_path: Path, monkeypatch):
 
         actor_1 = client.post(
             f"/api/scenes/{scene_id}/utterance",
-            data={"text_override": "I am here."},
+            json={"text": "I am here."},
         )
         assert actor_1.status_code == 200
         actor_state = actor_1.json()["state"]
@@ -45,7 +45,7 @@ def test_scene_runtime_flow(tmp_path: Path, monkeypatch):
 
         rewrite = client.post(
             f"/api/scenes/{scene_id}/utterance",
-            data={"text_override": "reader try this: This isn't the place."},
+            json={"text": "reader try this: This isn't the place."},
         )
         assert rewrite.status_code == 200
         rewrite_state = rewrite.json()["state"]
@@ -53,7 +53,7 @@ def test_scene_runtime_flow(tmp_path: Path, monkeypatch):
 
         actor_2 = client.post(
             f"/api/scenes/{scene_id}/utterance",
-            data={"text_override": "Fine. Here's the truth."},
+            json={"text": "Fine. Here's the truth."},
         )
         assert actor_2.status_code == 200
         ready_state = actor_2.json()["state"]
@@ -61,7 +61,7 @@ def test_scene_runtime_flow(tmp_path: Path, monkeypatch):
 
         lock = client.post(
             f"/api/scenes/{scene_id}/utterance",
-            data={"text_override": "ok scene, lock this version"},
+            json={"text": "ok scene, lock this version"},
         )
         assert lock.status_code == 200
         lock_state = lock.json()["state"]

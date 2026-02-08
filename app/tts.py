@@ -7,7 +7,8 @@ import httpx
 
 from app.config import Settings
 from app.models import StyleState
-from app.storage.files import audio_dir
+from app.storage import audio_dir
+from app.style_utils import clamp, emotion_from_style
 
 
 class CartesiaTTSClient:
@@ -30,7 +31,7 @@ class CartesiaTTSClient:
             "Cartesia-Version": "2025-04-16",
             "Content-Type": "application/json",
         }
-        emotion = self._emotion_from_style(style)
+        emotion = emotion_from_style(style)
         transcript = self._apply_expression_tag(text, emotion, style.pace)
         payload = {
             "model_id": self._settings.cartesia_tts_model,
@@ -42,7 +43,7 @@ class CartesiaTTSClient:
                 "sample_rate": 44100,
             },
             "generation_config": {
-                "speed": round(_clamp(style.pace, 0.7, 1.3), 2),
+                "speed": round(clamp(style.pace, 0.7, 1.3), 2),
                 "emotion": emotion,
             },
             "language": "en",
@@ -55,25 +56,8 @@ class CartesiaTTSClient:
         target_path.write_bytes(response.content)
         return f"/api/scenes/{scene_id}/audio/{event_id}.wav"
 
-    def _emotion_from_style(self, style: StyleState) -> str:
-        if style.tension >= 0.75 and style.warmth <= -0.2:
-            return "angry"
-        if style.tension >= 0.75 and style.warmth > -0.2:
-            return "scared"
-        if style.warmth >= 0.5 and style.tension < 0.6:
-            return "content"
-        if style.warmth >= 0.2 and style.tension >= 0.55:
-            return "excited"
-        if style.warmth <= -0.5:
-            return "sad"
-        return "neutral"
-
     def _apply_expression_tag(self, text: str, emotion: str, pace: float) -> str:
         if not self._settings.cartesia_tts_use_ssml_emotion:
             return text
-        speed = round(_clamp(pace, 0.6, 1.5), 2)
+        speed = round(clamp(pace, 0.6, 1.5), 2)
         return f'<emotion value="{emotion}" /><speed ratio="{speed}"/>{text}'
-
-
-def _clamp(value: float, min_v: float, max_v: float) -> float:
-    return max(min_v, min(max_v, value))

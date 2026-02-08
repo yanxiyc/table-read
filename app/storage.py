@@ -39,7 +39,9 @@ def audio_dir(settings: Settings, scene_id: str) -> Path:
 def save_scene(settings: Settings, scene: Scene) -> None:
     path = scene_json_path(settings, scene.scene_id)
     _ensure_dir(path.parent)
-    path.write_text(json.dumps(scene.model_dump(mode="json"), indent=2), encoding="utf-8")
+    path.write_text(
+        json.dumps(scene.model_dump(mode="json"), indent=2), encoding="utf-8"
+    )
 
 
 def load_scene(settings: Settings, scene_id: str) -> Scene:
@@ -53,7 +55,9 @@ def load_scene(settings: Settings, scene_id: str) -> Scene:
 def save_session(settings: Settings, scene_id: str, state: SessionState) -> None:
     path = session_json_path(settings, scene_id)
     _ensure_dir(path.parent)
-    path.write_text(json.dumps(state.model_dump(mode="json"), indent=2), encoding="utf-8")
+    path.write_text(
+        json.dumps(state.model_dump(mode="json"), indent=2), encoding="utf-8"
+    )
 
 
 def load_session(settings: Settings, scene_id: str) -> Optional[SessionState]:
@@ -64,7 +68,9 @@ def load_session(settings: Settings, scene_id: str) -> Optional[SessionState]:
     return SessionState.model_validate(data)
 
 
-def append_transcript_event(settings: Settings, scene_id: str, event: TranscriptEvent) -> None:
+def append_transcript_event(
+    settings: Settings, scene_id: str, event: TranscriptEvent
+) -> None:
     path = transcript_jsonl_path(settings, scene_id)
     _ensure_dir(path.parent)
     with path.open("a", encoding="utf-8") as fh:
@@ -77,4 +83,6 @@ def save_locked_artifacts(
 ) -> None:
     base = scene_dir(settings, scene_id)
     (base / "locked_script.txt").write_text(locked_script_text, encoding="utf-8")
-    (base / "notes.json").write_text(json.dumps(list(notes), indent=2), encoding="utf-8")
+    (base / "notes.json").write_text(
+        json.dumps(list(notes), indent=2), encoding="utf-8"
+    )

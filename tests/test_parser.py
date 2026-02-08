@@ -1,6 +1,6 @@
 import pytest
 
-from app.parser.script_parser import ScriptParseError, parse_script
+from app.parser import ScriptParseError, parse_script
 
 
 def test_parse_script_success():

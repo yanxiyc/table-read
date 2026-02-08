@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from app.models import Beat, Scene, SessionState, StyleState, Variant
+from app.style_utils import clamp
 
 LOCK_PATTERNS = (
     re.compile(r"\block this version\b", re.IGNORECASE),
@@ -65,7 +66,9 @@ def classify_utterance(text: str) -> str:
     return "actor"
 
 
-def apply_director_command(scene: Scene, state: SessionState, text: str) -> CommandResult:
+def apply_director_command(
+    scene: Scene, state: SessionState, text: str
+) -> CommandResult:
     result = CommandResult()
     lower = text.lower()
     style_actions = _apply_style_modifiers(state.style, lower)
@@ -124,21 +127,21 @@ def apply_director_command(scene: Scene, state: SessionState, text: str) -> Comm
 def _apply_style_modifiers(style: StyleState, lower_text: str) -> list[str]:
     actions: list[str] = []
     if "slower" in lower_text:
-        style.pace = _clamp(style.pace - 0.1, 0.8, 1.2)
-        style.pause_ms = int(_clamp(style.pause_ms + 80, 100, 2000))
+        style.pace = clamp(style.pace - 0.1, 0.8, 1.2)
+        style.pause_ms = int(clamp(style.pause_ms + 80, 100, 2000))
         actions.append("pace:slower")
     if "faster" in lower_text:
-        style.pace = _clamp(style.pace + 0.1, 0.8, 1.2)
-        style.pause_ms = int(_clamp(style.pause_ms - 80, 100, 2000))
+        style.pace = clamp(style.pace + 0.1, 0.8, 1.2)
+        style.pause_ms = int(clamp(style.pause_ms - 80, 100, 2000))
         actions.append("pace:faster")
     if "warmer" in lower_text:
-        style.warmth = _clamp(style.warmth + 0.2, -1.0, 1.0)
+        style.warmth = clamp(style.warmth + 0.2, -1.0, 1.0)
         actions.append("warmth:up")
     if "cooler" in lower_text or re.search(r"\bcold\b", lower_text):
-        style.warmth = _clamp(style.warmth - 0.2, -1.0, 1.0)
+        style.warmth = clamp(style.warmth - 0.2, -1.0, 1.0)
         actions.append("warmth:down")
     if "tense" in lower_text or "tension" in lower_text:
-        style.tension = _clamp(style.tension + 0.2, 0.0, 1.0)
+        style.tension = clamp(style.tension + 0.2, 0.0, 1.0)
         actions.append("tension:up")
     return actions
 
@@ -218,7 +221,3 @@ def _heuristic_rewrite(canonical: str, prompt: str) -> str:
 def _is_replay_intent(lower_text: str) -> bool:
     replay_markers = ("again", "redo", "one more time", "do it again")
     return any(marker in lower_text for marker in replay_markers)
-
-
-def _clamp(value: float, min_v: float, max_v: float) -> float:
-    return max(min_v, min(max_v, value))

@@ -1,6 +1,32 @@
+# Environment
 .env
+.env.local
+
+# Python
 __pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
 .pytest_cache/
 .mypy_cache/
-*.pyc
+.ruff_cache/
+
+# Data
 data/scenes/*
+!data/scenes/.gitkeep
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store

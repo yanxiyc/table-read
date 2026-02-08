@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.config import Settings
-from app.integrations.cartesia_tts import CartesiaTTSClient
+from app.tts import CartesiaTTSClient
 from app.models import (
     DirectorEvent,
     Scene,
@@ -15,7 +15,7 @@ from app.models import (
     TranscriptEvent,
 )
 from app.runtime.commands import apply_director_command, classify_utterance
-from app.storage import files
+from app import storage as files
 
 
 @dataclass
@@ -85,7 +85,9 @@ class SceneRuntimeEngine:
             scene = self.load_scene(scene_id)
             state = self._load_or_init_state(scene_id)
             if state.status not in {SceneStatus.RUNNING, SceneStatus.READY_TO_LOCK}:
-                raise RuntimeError(f"Scene is not accepting utterances in status={state.status}.")
+                raise RuntimeError(
+                    f"Scene is not accepting utterances in status={state.status}."
+                )
 
             kind = classify_utterance(normalized_text)
             actions: list[str] = []
@@ -124,7 +126,10 @@ class SceneRuntimeEngine:
                     TranscriptEvent(
                         speaker="DIRECTOR",
                         text=normalized_text,
-                        meta={"classification": "director_cmd", "actions": result.actions},
+                        meta={
+                            "classification": "director_cmd",
+                            "actions": result.actions,
+                        },
                     ),
                 )
                 if result.rewind_to is not None:
@@ -143,7 +148,10 @@ class SceneRuntimeEngine:
                 )
 
             # Actor line
-            if state.beat_index < len(scene.beats) and scene.beats[state.beat_index].speaker == "ACTOR":
+            if (
+                state.beat_index < len(scene.beats)
+                and scene.beats[state.beat_index].speaker == "ACTOR"
+            ):
                 beat = scene.beats[state.beat_index]
                 state.actor_latest_takes[beat.id] = normalized_text
                 state.last_talk_turn = "ACTOR"
@@ -155,7 +163,8 @@ class SceneRuntimeEngine:
                         text=normalized_text,
                         meta={
                             "beat_id": beat.id,
-                            "character": beat.character or scene.characters.get("ACTOR", "ACTOR"),
+                            "character": beat.character
+                            or scene.characters.get("ACTOR", "ACTOR"),
                         },
                     ),
                 )
@@ -191,7 +200,9 @@ class SceneRuntimeEngine:
             )
 
     def _advance_ai(self, scene: Scene, state: SessionState) -> None:
-        while state.status == SceneStatus.RUNNING and state.beat_index < len(scene.beats):
+        while state.status == SceneStatus.RUNNING and state.beat_index < len(
+            scene.beats
+        ):
             beat = scene.beats[state.beat_index]
             if beat.speaker != "AI":
                 break
@@ -215,7 +226,9 @@ class SceneRuntimeEngine:
                 )
                 if audio_url:
                     transcript_event.meta["audio_url"] = audio_url
-            except Exception as exc:  # pragma: no cover - network failures are runtime concerns
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - network failures are runtime concerns
                 transcript_event.meta["tts_error"] = str(exc)
 
             self._append_transcript(scene.scene_id, state, transcript_event)
@@ -238,7 +251,9 @@ class SceneRuntimeEngine:
                 lines.append(f"{label}: {self._active_ai_text(beat)}")
                 continue
             actor_text = state.actor_latest_takes.get(beat.id)
-            final_text = actor_text if actor_text is not None else (beat.canonical or "")
+            final_text = (
+                actor_text if actor_text is not None else (beat.canonical or "")
+            )
             lines.append(f"{label}: {final_text}" if final_text else f"{label}:")
 
         locked_script = "\n".join(lines)
@@ -279,7 +294,9 @@ class SceneRuntimeEngine:
             f"Transcript summary: ai_lines={ai_count}, actor_lines={actor_count}",
         ]
 
-    def _append_transcript(self, scene_id: str, state: SessionState, event: TranscriptEvent) -> None:
+    def _append_transcript(
+        self, scene_id: str, state: SessionState, event: TranscriptEvent
+    ) -> None:
         state.transcript.append(event)
         files.append_transcript_event(self._settings, scene_id, event)
 

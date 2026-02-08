@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --card: #141414;
+  --card-foreground: #ededed;
+  --border: #262626;
+  --muted: #737373;
+  --muted-foreground: #a3a3a3;
+  --accent-acting: #14b8a6;
+  --accent-narrating: #f59e0b;
+  --accent: #14b8a6;
+  --destructive: #ef4444;
+}
+
+/* LiveKit component overrides */
+[data-lk-theme="default"] {
+  --lk-bg: var(--background);
+  --lk-fg: var(--foreground);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+/* Pulse animation for verdict badges */
+@keyframes pulse-acting {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(20, 184, 166, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(20, 184, 166, 0); }
+}
+@keyframes pulse-narrating {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+}
+
+.animate-pulse-acting {
+  animation: pulse-acting 2s ease-in-out infinite;
+}
+.animate-pulse-narrating {
+  animation: pulse-narrating 2s ease-in-out infinite;
+}
+
+/* Fade-in animation */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
+}
