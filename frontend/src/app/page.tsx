@@ -3,8 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
 export default function CreateScenePage() {
   const router = useRouter();
   const [title, setTitle] = useState("");
@@ -20,7 +18,7 @@ export default function CreateScenePage() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_URL}/api/scenes`, {
+      const res = await fetch("/api/scenes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

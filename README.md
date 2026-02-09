@@ -5,50 +5,57 @@ AI-powered script rehearsal with a LiveKit voice agent and AI director feedback.
 ## Architecture
 
 ```
-Next.js (port 3000)              FastAPI (port 8000)              LiveKit Agent
-├── /  (create scene)            ├── /api/scenes (CRUD)           └── agent.py dev
-├── /scene/[sceneId]             └── runtime engine
+Next.js (port 3000)              LiveKit Agents
+├── /  (create scene)            ├── agent.py dev (character)
+├── /scene/[sceneId]             └── director_agent.py dev (director)
 │   └── LiveKit room + panels
-└── /api/token
-    └── JWT + agent dispatch
+└── /api/
+    ├── scenes (CRUD)            data/scenes/ (shared JSON)
+    └── token (JWT + dispatch)       ↕
+                                 agent reads/writes
 ```
 
-- **Next.js** — React frontend with LiveKit components, Tailwind CSS
-- **FastAPI** — scene persistence and runtime engine API
-- **LiveKit Agent** — voice rehearsal loop with AI character (Cartesia TTS) and AI director (Claude)
+- **Next.js** — frontend + API routes (scene CRUD, LiveKit token)
+- **LiveKit Agents** — character agent + director agent (Claude evaluation)
+- **Notion** — source of truth for scene definitions (title, characters, beats)
+- **Local fallback** — `data/scenes/` directory with JSON files (used when Notion is unavailable)
 
 ## Project Structure
 
 ```
 table-read/
-├── agent.py                     # LiveKit agent entry point
-├── app/
-│   ├── main.py                  # FastAPI app factory + CORS
-│   ├── routes.py                # API endpoints (scenes CRUD + utterance)
+├── agent.py                     # Character agent entry point
+├── director_agent.py            # Director agent entry point
+├── app/                         # Python modules (used by agent)
 │   ├── models.py                # Pydantic data models
 │   ├── config.py                # Settings from environment
 │   ├── parser.py                # Script text → Beat list
-│   ├── storage.py               # Scene/session JSON persistence
-│   ├── tts.py                   # Cartesia TTS client
+│   ├── storage.py               # Scene/session persistence (Notion + file fallback)
+│   ├── notion_client.py         # Notion REST API wrapper (httpx)
+│   ├── style_utils.py           # Shared emotion/clamp helpers
 │   ├── agents/                  # LiveKit agent logic
 │   │   ├── character_agent.py   # ScriptedCharacterAgent (beat loop)
-│   │   ├── director_observer.py # AI director evaluation (Claude)
+│   │   ├── director_agent.py    # Director agent logic (Claude)
 │   │   ├── rpc.py               # RPC/byte-stream helpers
 │   │   ├── state.py             # Shared session state dataclass
 │   │   └── prompts/             # LLM prompt templates
 │   │       └── director_evaluation.yaml
-│   └── runtime/                 # State machine
-│       ├── engine.py            # SceneRuntimeEngine
+│   └── runtime/
 │       └── commands.py          # Utterance classification + director commands
 ├── frontend/                    # Next.js app
 │   └── src/
 │       ├── app/                 # Pages + API routes
 │       │   ├── page.tsx         # Create scene form
 │       │   ├── scene/[sceneId]/ # Rehearsal room
-│       │   └── api/token/       # LiveKit token generation
+│       │   └── api/
+│       │       ├── scenes/      # Scene CRUD API routes
+│       │       └── token/       # LiveKit token generation
 │       ├── components/          # React UI panels
 │       ├── hooks/               # useTableReadStatus (RPC + byte stream)
-│       └── lib/                 # Utilities
+│       └── lib/
+│           ├── scenes.ts        # Scene types, parser, storage
+│           ├── notion.ts        # Notion client (@notionhq/client)
+│           └── utils.ts         # Tailwind utilities
 ├── tests/                       # Python tests
 └── pyproject.toml
 ```
@@ -71,12 +78,22 @@ cd frontend && npm install
 
 ```bash
 cp .env.example .env
-# Edit .env with your API keys (Cartesia, LiveKit, Anthropic)
+# Edit .env with your API keys (LiveKit, Anthropic, Notion)
 
 cd frontend
 cp .env.local.example .env.local
-# Edit .env.local if LiveKit settings differ from defaults
+# Edit .env.local with LiveKit + Notion credentials
 ```
+
+### 3b. Set up Notion (optional but recommended)
+
+1. Create a [Notion Integration](https://www.notion.so/my-integrations) with read/write content capabilities
+2. Copy the **Internal Integration Secret** → `NOTION_TOKEN`
+3. Create a database in Notion with these properties:
+   - **Name** (title), **Scene ID** (text), **AI Character** (text), **Actor Label** (text), **Voice ID** (text), **Status** (select: IDLE, RUNNING, READY_TO_LOCK, LOCKED)
+4. Share the database with your integration (⋯ → Connections → add your integration)
+5. Copy the database ID from the URL → `NOTION_DATABASE_ID`
+6. Add both to `.env` and `frontend/.env.local`
 
 ### 4. Start LiveKit server
 
@@ -85,11 +102,10 @@ Follow the [LiveKit quickstart](https://docs.livekit.io/home/self-hosting/local/
 ### 5. Run all three processes
 
 ```bash
-# Terminal 1: FastAPI backend
-uvicorn app.main:app --port 8000
-
-# Terminal 2: LiveKit agent
+# Terminal 1: Character agent
 python agent.py dev
+# Terminal 2: Director agent
+python director_agent.py dev
 
 # Terminal 3: Next.js frontend
 cd frontend && npm run dev
@@ -116,16 +132,6 @@ ROMEO:
 
 Set **AI Character Name** to the character spoken by TTS (e.g. `JULIET`). All other character lines become actor turns.
 
-## API
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/scenes` | Create a scene from script text |
-| `GET` | `/api/scenes/{id}` | Get scene details |
-| `POST` | `/api/scenes/{id}/start` | Start rehearsal |
-| `GET` | `/api/scenes/{id}/state` | Get current session state |
-| `POST` | `/api/scenes/{id}/utterance` | Submit text utterance (JSON body: `{"text": "..."}`) |
-
 ## Tests
 
 ```bash
@@ -135,7 +141,7 @@ pytest
 ## Key Technologies
 
 - [LiveKit Agents](https://docs.livekit.io/agents/) — real-time voice, RPC, byte streams
-- [Cartesia](https://cartesia.ai/) — TTS (Sonic-2) and STT (Ink-Whisper) via LiveKit plugins
+- [Cartesia](https://cartesia.ai/) — TTS (Sonic-3) and STT (Ink-Whisper) via LiveKit plugins
 - [Anthropic Claude](https://docs.anthropic.com/) — AI director evaluation
-- [Next.js](https://nextjs.org/) + [Tailwind CSS](https://tailwindcss.com/) — frontend
-- [FastAPI](https://fastapi.tiangolo.com/) — backend API
+- [Notion API](https://developers.notion.com/) — scene persistence and real-time script editing
+- [Next.js](https://nextjs.org/) + [Tailwind CSS](https://tailwindcss.com/) — frontend + API

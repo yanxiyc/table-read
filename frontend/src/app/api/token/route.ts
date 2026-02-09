@@ -23,7 +23,12 @@ export async function POST(req: NextRequest) {
   const identity = `actor-${sceneId.slice(0, 8)}`;
 
   const agentDispatch = new RoomAgentDispatch({ agentName: "table-read-agent" });
-  const roomConfig = new RoomConfiguration({ agents: [agentDispatch] });
+  const directorDispatch = new RoomAgentDispatch({
+    agentName: "table-read-director",
+  });
+  const roomConfig = new RoomConfiguration({
+    agents: [agentDispatch, directorDispatch],
+  });
 
   const at = new AccessToken(apiKey, apiSecret, {
     identity,

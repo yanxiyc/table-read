@@ -11,14 +11,13 @@ import logging
 from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, cli, inference
 from livekit.agents.voice import AgentSession
-from livekit.plugins import anthropic, silero
+from livekit.plugins import silero
 
 from app.agents.character_agent import ScriptedCharacterAgent
-from app.agents.director_observer import DirectorObserver
 from app.agents.state import TableReadUserData
 from app.config import get_settings
 from app.models import SessionState
-from app.storage import load_scene
+from app.storage import load_scene_smart
 
 load_dotenv()
 logger = logging.getLogger("table-read-agent")
@@ -34,7 +33,7 @@ async def entrypoint(ctx: JobContext):
 
     The room name is expected to be ``table-read-{scene_id}``.
     The agent loads the scene from disk, sets up TTS/STT/VAD,
-    creates the DirectorObserver, and starts the ScriptedCharacterAgent.
+    and starts the ScriptedCharacterAgent.
     """
     await ctx.connect()
 
@@ -47,8 +46,8 @@ async def entrypoint(ctx: JobContext):
 
     settings = get_settings()
 
-    # Load the scene from disk (must have been created via the FastAPI endpoint)
-    scene = load_scene(settings, scene_id)
+    # Load the scene (Notion first, disk fallback)
+    scene = await load_scene_smart(settings, scene_id)
     ai_voice_id = scene.voice.get("ai_voice_id", "")
 
     # Build shared state
@@ -63,7 +62,7 @@ async def entrypoint(ctx: JobContext):
     # Configure session components using inference.* API
     vad = ctx.proc.userdata.get("vad") or silero.VAD.load()
 
-    tts_kwargs: dict = {"model": "cartesia/sonic-2"}
+    tts_kwargs: dict = {"model": "cartesia/sonic-3"}
     if ai_voice_id:
         tts_kwargs["voice"] = ai_voice_id
 
@@ -72,13 +71,8 @@ async def entrypoint(ctx: JobContext):
         vad=vad,
         stt=inference.STT(model="cartesia/ink-whisper"),
         tts=inference.TTS(**tts_kwargs),
-        llm=inference.LLM(model="openai/gpt-4.1-mini"),
     )
 
-    # Create the director observer (uses Anthropic Claude for evaluation)
-    director_llm = anthropic.LLM(model="claude-sonnet-4-5-20250929")
-    director = DirectorObserver(session=session, llm=director_llm)
-    userdata.director = director
 
     logger.info(
         "Starting table-read agent for scene %s (room: %s)",
@@ -96,6 +90,7 @@ async def entrypoint(ctx: JobContext):
 if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
+            agent_name="table-read-agent",
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
         ),

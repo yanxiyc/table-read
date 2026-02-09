@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
-from livekit.agents.voice import Agent, UserTurnCompleted
+from livekit.agents.voice import Agent, AgentSession, UserTurnCompleted
 
 from app.agents.state import TableReadUserData
 from app.models import (
@@ -12,12 +14,14 @@ from app.models import (
     DirectorEvent,
     SceneStatus,
     SessionState,
+    StyleState,
     TranscriptEvent,
+    new_event_id,
+    utc_now_iso,
 )
 from app.runtime.commands import apply_director_command, classify_utterance
 from app.agents.rpc import send_rpc_to_ui_safe, stream_bytes_to_ui
-from app.style_utils import emotion_from_style
-from app.storage import (
+from app.storage.files import (
     append_transcript_event,
     save_locked_artifacts,
     save_scene,
@@ -148,7 +152,7 @@ class ScriptedCharacterAgent(Agent):
                 continue
 
             # Build SSML-style markup for Cartesia emotion/speed
-            emotion = emotion_from_style(ud.session_state.style)
+            emotion = self._emotion_from_style(ud.session_state.style)
             pace = round(ud.session_state.style.pace, 2)
             ssml_text = f'<emotion value="{emotion}"/><speed ratio="{pace}"/>{text}'
 
@@ -203,7 +207,8 @@ class ScriptedCharacterAgent(Agent):
             "current_beat_id": current_beat.id if current_beat else None,
             "current_speaker": current_beat.speaker if current_beat else None,
             "transcript": [
-                te.model_dump(mode="json") for te in ud.session_state.transcript[-5:]
+                te.model_dump(mode="json")
+                for te in ud.session_state.transcript[-5:]
             ],
             "style": ud.session_state.style.model_dump(mode="json"),
             "actor_latest_takes": ud.session_state.actor_latest_takes,
@@ -289,6 +294,21 @@ class ScriptedCharacterAgent(Agent):
         return beat.canonical
 
     @staticmethod
+    def _emotion_from_style(style: StyleState) -> str:
+        """Map style parameters to a Cartesia emotion label."""
+        if style.tension >= 0.75 and style.warmth <= -0.2:
+            return "angry"
+        if style.tension >= 0.75 and style.warmth > -0.2:
+            return "scared"
+        if style.warmth >= 0.5 and style.tension < 0.6:
+            return "content"
+        if style.warmth >= 0.2 and style.tension >= 0.55:
+            return "excited"
+        if style.warmth <= -0.5:
+            return "sad"
+        return "neutral"
+
+    @staticmethod
     def _build_lock_notes(state: SessionState) -> list[str]:
         """Produce human-readable summary notes for the locked scene."""
         notes: list[str] = []
@@ -326,3 +346,4 @@ class ScriptedCharacterAgent(Agent):
         evt = TranscriptEvent(speaker=speaker, text=text, meta=meta or {})
         ud.session_state.transcript.append(evt)
         append_transcript_event(ud.settings, ud.scene.scene_id, evt)
+1

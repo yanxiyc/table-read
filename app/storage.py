@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Iterable, Optional
 
 from app.config import Settings
 from app.models import Scene, SessionState, TranscriptEvent
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_dir(path: Path) -> None:
@@ -45,11 +48,30 @@ def save_scene(settings: Settings, scene: Scene) -> None:
 
 
 def load_scene(settings: Settings, scene_id: str) -> Scene:
+    """Load scene from disk (file-based fallback)."""
     path = scene_json_path(settings, scene_id)
     if not path.exists():
         raise FileNotFoundError(f"Scene '{scene_id}' not found.")
     data = json.loads(path.read_text(encoding="utf-8"))
     return Scene.model_validate(data)
+
+
+async def load_scene_smart(settings: Settings, scene_id: str) -> Scene:
+    """Load scene from Notion first, falling back to local disk."""
+    if settings.notion_token and settings.notion_database_id:
+        try:
+            from app.notion_client import load_scene_from_notion
+
+            scene = await load_scene_from_notion(settings, scene_id)
+            logger.info("Loaded scene %s from Notion", scene_id)
+            return scene
+        except Exception:
+            logger.warning(
+                "Failed to load scene %s from Notion, falling back to disk",
+                scene_id,
+                exc_info=True,
+            )
+    return load_scene(settings, scene_id)
 
 
 def save_session(settings: Settings, scene_id: str, state: SessionState) -> None:

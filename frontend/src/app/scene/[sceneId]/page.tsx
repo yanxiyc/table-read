@@ -14,8 +14,6 @@ import { Mic, MicOff, PhoneOff } from "lucide-react";
 import { RehearsalPanel } from "@/components/RehearsalPanel";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
 interface Scene {
   scene_id: string;
   title: string;
@@ -47,7 +45,7 @@ export default function ScenePage({
   const [connecting, setConnecting] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_URL}/api/scenes/${sceneId}`)
+    fetch(`/api/scenes/${sceneId}`)
       .then((res) => {
         if (!res.ok) throw new Error("Scene not found");
         return res.json();
@@ -60,12 +58,7 @@ export default function ScenePage({
     setConnecting(true);
     setError(null);
     try {
-      // Start the scene first
-      await fetch(`${API_URL}/api/scenes/${sceneId}/start`, {
-        method: "POST",
-      });
-
-      // Get LiveKit token
+      // Get LiveKit token (agent handles scene start on connect)
       const res = await fetch("/api/token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
